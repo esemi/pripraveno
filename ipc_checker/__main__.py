@@ -1,18 +1,21 @@
-"""CLI для крона: проверить статусы заявок и напечатать их в stdout.
+"""CLI для крона: проверить статусы заявок, вывести их в stdout и слать письмо
+при изменении статуса.
 
 Номера заявок передаются позиционными аргументами. Каждый может быть в виде:
     OAM-12345/CC-2024              — просто заявка
     OAM-12345/CC-2024=ABCD12345    — заявка + номер визовой аппликации (zov), опционально
 
-Каждый прогон печатает текущий статус каждой заявки. Если статус изменился
-относительно прошлого запуска, к строке добавляется пометка об изменении.
-Крон сам разошлёт stdout по email через MAILTO.
+Каждый прогон печатает текущий статус каждой заявки в stdout. Если статус
+какой-то заявки изменился относительно прошлого запуска — на почту уходит письмо
+(SMTP, см. ipc_checker/notify.py). Если SMTP не сконфигурирован, изменения только
+печатаются в stdout.
 """
 import argparse
 import sys
 from pathlib import Path
 
 from .client import CheckError, IpcClient, ProceedingNotFound
+from .notify import Mailer
 from .reference import Reference
 from .state import StateStore
 
@@ -53,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
 
     store = StateStore(STATE_PATH).load()
     errors = 0
+    changes: list[str] = []  # строки для письма — только реально изменившиеся заявки
 
     with IpcClient(headless=not args.no_headless) as client:
         for ref, visa in entries:
@@ -72,14 +76,38 @@ def main(argv: list[str] | None = None) -> int:
             store.set(key, result.state)
 
             if prev is not None and prev != result.state:
-                print(f"{key}: {result.state} (было {prev})")
+                line = f"{key}: {result.state} (было {prev})"
+                changes.append(line)
+                print(line)
             else:
                 print(f"{key}: {result.state}")
 
     store.save()
 
+    if changes:
+        _notify(changes)
+
     # Есть ошибки, но стейт по успешным заявкам мы всё равно сохранили.
     return 1 if errors else 0
+
+
+def _notify(changes: list[str]) -> None:
+    """Отправить письмо об изменениях; при отсутствии SMTP или ошибке — не падать."""
+    mailer = Mailer()
+    if not mailer.is_configured():
+        print(
+            "INFO: статус изменился, но SMTP не настроен (IPC_SMTP_USER/IPC_SMTP_PASSWORD) — "
+            "письмо не отправлено",
+            file=sys.stderr,
+        )
+        return
+
+    subject = "IPC: изменился статус заявки"
+    body = "Изменились статусы заявок на ipc.gov.cz:\n\n" + "\n".join(changes) + "\n"
+    try:
+        mailer.send(subject, body)
+    except Exception as exc:  # noqa: BLE001 — уведомление не должно ронять прогон
+        print(f"ERROR: не удалось отправить письмо: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

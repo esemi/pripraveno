@@ -6,4 +6,6 @@ venv/
 state.json
 state.json.tmp
 *.tmp
+.env
+cron.log
 .pytest_cache/
