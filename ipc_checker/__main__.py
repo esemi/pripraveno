@@ -1,12 +1,12 @@
-"""CLI для крона: проверить статусы заявок и напечатать изменения в stdout.
+"""CLI для крона: проверить статусы заявок и напечатать их в stdout.
 
 Номера заявок передаются позиционными аргументами. Каждый может быть в виде:
     OAM-12345/CC-2024              — просто заявка
     OAM-12345/CC-2024=ABCD12345    — заявка + номер визовой аппликации (zov), опционально
 
-При изменении статуса относительно прошлого запуска строка «CHANGED …» уходит в stdout.
-Крон сам разошлёт stdout по email через MAILTO. Первый запуск фиксирует базовый
-статус и (по умолчанию) молчит — используй --notify-new чтобы печатать и его.
+Каждый прогон печатает текущий статус каждой заявки. Если статус изменился
+относительно прошлого запуска, к строке добавляется пометка об изменении.
+Крон сам разошлёт stdout по email через MAILTO.
 """
 import argparse
 import sys
@@ -16,7 +16,7 @@ from .client import CheckError, IpcClient, ProceedingNotFound
 from .reference import Reference
 from .state import StateStore
 
-DEFAULT_STATE_PATH = Path(__file__).resolve().parent.parent / "state.json"
+STATE_PATH = Path(__file__).resolve().parent.parent / "state.json"
 
 
 def _parse_entry(entry: str) -> tuple[Reference, str]:
@@ -25,33 +25,15 @@ def _parse_entry(entry: str) -> tuple[Reference, str]:
     return Reference.parse(raw), visa.strip()
 
 
-def _describe(state: str) -> str:
-    """Человекочитаемое описание кода статуса."""
-    return {
-        "INPROGRESS": "в обработке",
-        "APPROVED": "одобрено",
-    }.get(state, f"решение принято ({state})")
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ipc_checker",
-        description="Проверка статуса заявок на ipc.gov.cz с уведомлением об изменениях.",
+        description="Проверка статуса заявок на ipc.gov.cz.",
     )
     parser.add_argument(
         "numbers",
         nargs="+",
         help="Номера заявок (OAM-.../CC-2024[=ZOV]), хотя бы один",
-    )
-    parser.add_argument(
-        "--state",
-        default=str(DEFAULT_STATE_PATH),
-        help=f"Путь к JSON-стейту (по умолчанию {DEFAULT_STATE_PATH})",
-    )
-    parser.add_argument(
-        "--notify-new",
-        action="store_true",
-        help="Печатать статус и при первом появлении номера (по умолчанию — молча запомнить)",
     )
     parser.add_argument(
         "--no-headless",
@@ -69,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
 
-    store = StateStore(Path(args.state)).load()
+    store = StateStore(STATE_PATH).load()
     errors = 0
 
     with IpcClient(headless=not args.no_headless) as client:
@@ -89,11 +71,10 @@ def main(argv: list[str] | None = None) -> int:
             prev = store.get(key)
             store.set(key, result.state)
 
-            if prev is None:
-                if args.notify_new:
-                    print(f"NEW     {key}: {_describe(result.state)}")
-            elif prev != result.state:
-                print(f"CHANGED {key}: {_describe(prev)} -> {_describe(result.state)}")
+            if prev is not None and prev != result.state:
+                print(f"{key}: {result.state} (было {prev})")
+            else:
+                print(f"{key}: {result.state}")
 
     store.save()
 
