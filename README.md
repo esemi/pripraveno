@@ -1,8 +1,8 @@
 # pripraveno
 
 Крон-скрипт: проверяет статус заявок на сайте
-[ipc.gov.cz](https://ipc.gov.cz/en/status-of-your-application/) и шлёт письмо,
-если статус изменился с прошлого запуска.
+[ipc.gov.cz](https://ipc.gov.cz/en/status-of-your-application/) и шлёт сообщение
+в Telegram, если статус изменился с прошлого запуска.
 
 ## Как это работает
 
@@ -60,41 +60,31 @@ python3.14 -m venv .venv
 
 Каждый прогон печатает текущий статус каждой заявки в stdout (`state` как есть,
 без перевода). Если статус изменился с прошлого запуска — строка помечается
-`(было …)` и на почту уходит письмо. Прошлые статусы хранятся в `state.json`
+`(было …)` и в Telegram уходит сообщение. Прошлые статусы хранятся в `state.json`
 рядом с проектом.
 
 Коды возврата: `0` — всё ок, `1` — были ошибки по отдельным заявкам (стейт по
 успешным всё равно сохранён), `2` — невалидный формат номера.
 
-## Уведомления на почту (SMTP)
+## Уведомления в Telegram
 
-Письмо шлётся напрямую из скрипта через SMTP (по умолчанию Gmail). Локальный MTA
-и `MAILTO` в cron не нужны. Креды берутся из окружения — в код/git не попадают:
+Сообщение шлётся напрямую из скрипта через Bot API (в личку). Нужны два аргумента:
 
-| Переменная          | Назначение                                       | По умолчанию     |
-|---------------------|--------------------------------------------------|------------------|
-| `IPC_SMTP_USER`     | логин SMTP (gmail-адрес отправителя)             | —                |
-| `IPC_SMTP_PASSWORD` | **app-пароль** Google (не пароль аккаунта!)      | —                |
-| `IPC_MAIL_TO`       | получатель                                        | `IPC_SMTP_USER`  |
-| `IPC_SMTP_HOST`     | SMTP-хост                                          | `smtp.gmail.com` |
-| `IPC_SMTP_PORT`     | порт STARTTLS                                      | `587`            |
+| Аргумент      | Назначение                                    |
+|---------------|-----------------------------------------------|
+| `--bot-token` | токен бота от [@BotFather](https://t.me/BotFather) |
+| `--chat-id`   | твой chat_id (личка с ботом)                  |
 
-App-пароль Google: <https://myaccount.google.com/apppasswords> (нужна включённая
-2FA). Если `IPC_SMTP_USER`/`IPC_SMTP_PASSWORD` не заданы — письмо не шлётся,
-изменения только печатаются в stdout.
+Свой `chat_id`: напиши боту `/start`, затем
+`https://api.telegram.org/bot<TOKEN>/getUpdates` — id в `message.chat.id`.
+
+Если `--bot-token`/`--chat-id` не заданы — уведомление не шлётся, изменения
+только печатаются в stdout.
 
 ## Cron
 
-Скрипт шлёт письмо сам, поэтому `MAILTO` не нужен. Креды удобно держать в
-отдельном файле (не в crontab) и подтягивать перед запуском. Пример — раз в 6 часов:
+Пример — раз в 6 часов (токен светится в crontab/ps, храни файл crontab закрытым):
 
 ```cron
-0 */6 * * * cd /home/esemi/development/pripraveno && set -a && . ./.env && set +a && .venv/bin/python -m ipc_checker "OAM-12345/CC-2024" >> cron.log 2>&1
-```
-
-где `.env` (в `.gitignore`) содержит:
-
-```sh
-IPC_SMTP_USER=esemiko@gmail.com
-IPC_SMTP_PASSWORD=<app-пароль>
+0 */6 * * * cd /home/esemi/development/pripraveno && .venv/bin/python -m ipc_checker "OAM-12345/CC-2024" --bot-token 123456:ABC... --chat-id 12345678 >> cron.log 2>&1
 ```

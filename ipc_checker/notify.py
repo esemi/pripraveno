@@ -1,41 +1,34 @@
-"""Отправка уведомления об изменении статусов по email через SMTP (Gmail).
+"""Отправка уведомления об изменении статусов в Telegram (в личку через бота).
 
-Креды берём из окружения, чтобы не хранить пароль в коде/git:
-    IPC_SMTP_USER      — логин SMTP (обычно gmail-адрес отправителя)
-    IPC_SMTP_PASSWORD  — app-пароль Google (не обычный пароль аккаунта)
-    IPC_MAIL_TO        — получатель (по умолчанию = IPC_SMTP_USER)
-    IPC_SMTP_HOST      — SMTP-хост (по умолчанию smtp.gmail.com)
-    IPC_SMTP_PORT      — порт STARTTLS (по умолчанию 587)
-
-Если IPC_SMTP_USER/IPC_SMTP_PASSWORD не заданы — отправка считается
-не сконфигурированной (is_configured() == False), письмо не шлётся.
+Токен бота и chat_id передаются в конструктор (из CLI-аргументов). Отправка —
+через Bot API sendMessage. Никаких внешних зависимостей: только stdlib.
 """
-import os
-import smtplib
-from email.message import EmailMessage
+import json
+import urllib.error
+import urllib.request
 
 
-class Mailer:
-    """Тонкая обёртка над smtplib для одного письма."""
+class TelegramNotifier:
+    """Слать сообщения в Telegram через Bot API."""
 
-    def __init__(self) -> None:
-        self.user = os.environ.get("IPC_SMTP_USER", "")
-        self.password = os.environ.get("IPC_SMTP_PASSWORD", "")
-        self.mail_to = os.environ.get("IPC_MAIL_TO") or self.user
-        self.host = os.environ.get("IPC_SMTP_HOST", "smtp.gmail.com")
-        self.port = int(os.environ.get("IPC_SMTP_PORT", "587"))
+    def __init__(self, bot_token: str, chat_id: str) -> None:
+        self.bot_token = bot_token
+        self.chat_id = chat_id
 
-    def is_configured(self) -> bool:
-        return bool(self.user and self.password and self.mail_to)
-
-    def send(self, subject: str, body: str) -> None:
-        msg = EmailMessage()
-        msg["Subject"] = subject
-        msg["From"] = self.user
-        msg["To"] = self.mail_to
-        msg.set_content(body)
-
-        with smtplib.SMTP(self.host, self.port, timeout=30) as smtp:
-            smtp.starttls()
-            smtp.login(self.user, self.password)
-            smtp.send_message(msg)
+    def send(self, text: str) -> None:
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = json.dumps({"chat_id": self.chat_id, "text": text}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")
+            raise RuntimeError(f"Telegram API HTTP {exc.code}: {detail}") from exc
+        if not body.get("ok"):
+            raise RuntimeError(f"Telegram API вернул ошибку: {body}")

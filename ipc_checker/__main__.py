@@ -1,4 +1,4 @@
-"""CLI для крона: проверить статусы заявок, вывести их в stdout и слать письмо
+"""CLI для крона: проверить статусы заявок, вывести их в stdout и слать в Telegram
 при изменении статуса.
 
 Номера заявок передаются позиционными аргументами. Каждый может быть в виде:
@@ -6,16 +6,16 @@
     OAM-12345/CC-2024=ABCD12345    — заявка + номер визовой аппликации (zov), опционально
 
 Каждый прогон печатает текущий статус каждой заявки в stdout. Если статус
-какой-то заявки изменился относительно прошлого запуска — на почту уходит письмо
-(SMTP, см. ipc_checker/notify.py). Если SMTP не сконфигурирован, изменения только
-печатаются в stdout.
+какой-то заявки изменился относительно прошлого запуска — уходит сообщение в
+Telegram (в личку через бота, --bot-token/--chat-id). Без этих аргументов
+изменения только печатаются в stdout.
 """
 import argparse
 import sys
 from pathlib import Path
 
 from .client import CheckError, IpcClient, ProceedingNotFound
-from .notify import Mailer
+from .notify import TelegramNotifier
 from .reference import Reference
 from .state import StateStore
 
@@ -39,6 +39,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Номера заявок (OAM-.../CC-2024[=ZOV]), хотя бы один",
     )
     parser.add_argument(
+        "--bot-token",
+        help="Токен Telegram-бота для уведомлений об изменении статуса",
+    )
+    parser.add_argument(
+        "--chat-id",
+        help="Telegram chat_id получателя (личка)",
+    )
+    parser.add_argument(
         "--no-headless",
         action="store_true",
         help="Показывать окно браузера (для отладки)",
@@ -56,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
 
     store = StateStore(STATE_PATH).load()
     errors = 0
-    changes: list[str] = []  # строки для письма — только реально изменившиеся заявки
+    changes: list[str] = []  # только реально изменившиеся заявки — для Telegram
 
     with IpcClient(headless=not args.no_headless) as client:
         for ref, visa in entries:
@@ -85,29 +93,28 @@ def main(argv: list[str] | None = None) -> int:
     store.save()
 
     if changes:
-        _notify(changes)
+        _notify(changes, args.bot_token, args.chat_id)
 
     # Есть ошибки, но стейт по успешным заявкам мы всё равно сохранили.
     return 1 if errors else 0
 
 
-def _notify(changes: list[str]) -> None:
-    """Отправить письмо об изменениях; при отсутствии SMTP или ошибке — не падать."""
-    mailer = Mailer()
-    if not mailer.is_configured():
+def _notify(changes: list[str], bot_token: str | None, chat_id: str | None) -> None:
+    """Отправить сообщение об изменениях в Telegram; без токена/chat_id или при
+    ошибке — не падать."""
+    if not (bot_token and chat_id):
         print(
-            "INFO: статус изменился, но SMTP не настроен (IPC_SMTP_USER/IPC_SMTP_PASSWORD) — "
-            "письмо не отправлено",
+            "INFO: статус изменился, но --bot-token/--chat-id не заданы — "
+            "уведомление в Telegram не отправлено",
             file=sys.stderr,
         )
         return
 
-    subject = "IPC: изменился статус заявки"
-    body = "Изменились статусы заявок на ipc.gov.cz:\n\n" + "\n".join(changes) + "\n"
+    text = "IPC: изменился статус заявки\n\n" + "\n".join(changes)
     try:
-        mailer.send(subject, body)
+        TelegramNotifier(bot_token, chat_id).send(text)
     except Exception as exc:  # noqa: BLE001 — уведомление не должно ронять прогон
-        print(f"ERROR: не удалось отправить письмо: {exc}", file=sys.stderr)
+        print(f"ERROR: не удалось отправить в Telegram: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":
